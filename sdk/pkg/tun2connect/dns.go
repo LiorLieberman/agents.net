@@ -81,6 +81,39 @@ func NewVirtualDNS() *VirtualDNS {
 	}
 }
 
+// Generations is how many equal slices NewGenerationDNS splits each pool
+// into: a /14 of the IPv4 pool and a /68 of the IPv6 pool.
+const Generations = 1 << generationBits
+
+const generationBits = 4
+
+// NewGenerationDNS returns a resolver that allocates only from slice
+// (generation mod Generations) of each pool. Consecutive generations never
+// hand out the same address, so a fresh adapter cannot give a name an
+// address that a restored guest still caches from the previous generation
+// (spec/draft/lifecycle.md Section 3, option (b)).
+func NewGenerationDNS(generation uint) *VirtualDNS {
+	d := NewVirtualDNS()
+	slice := generation % Generations
+	d.v4.pool, d.v4.last = generationSlice(v4Pool, slice)
+	d.v6.pool, d.v6.last = generationSlice(v6Pool, slice)
+	return d
+}
+
+// generationSlice returns slice g of pool and its first address, which
+// allocation starts after.
+func generationSlice(pool netip.Prefix, g uint) (netip.Prefix, netip.Addr) {
+	addr := pool.Addr().AsSlice()
+	for i := range generationBits {
+		if g&(1<<(generationBits-1-i)) != 0 {
+			bit := pool.Bits() + i
+			addr[bit/8] |= 0x80 >> (bit % 8)
+		}
+	}
+	base, _ := netip.AddrFromSlice(addr)
+	return netip.PrefixFrom(base, pool.Bits()+generationBits), base
+}
+
 func canonical(name string) string {
 	return strings.ToLower(strings.TrimSuffix(name, "."))
 }

@@ -122,11 +122,14 @@ func boundaryDialer(proxy string) (func(ctx context.Context) (net.Conn, error), 
 	}
 }
 
-func virtualDNS(ttl time.Duration) *tun2connect.VirtualDNS {
+func virtualDNS(ttl time.Duration, generation int) *tun2connect.VirtualDNS {
 	if ttl < 0 {
 		log.Fatalf("-dns-ttl must not be negative (got %v)", ttl)
 	}
 	resolver := tun2connect.NewVirtualDNS()
+	if generation >= 0 {
+		resolver = tun2connect.NewGenerationDNS(uint(generation))
+	}
 	resolver.TTL = ttl
 	return resolver
 }
@@ -144,9 +147,10 @@ func main() {
 	proxy := flag.String("proxy", "unix:///tmp/boundary.sock", "boundary address (unix:///path or tcp://host:port)")
 	udp := flag.Bool("udp", false, "tunnel UDP sessions via connect-udp (DNS is always answered locally)")
 	dnsTTL := flag.Duration("dns-ttl", tun2connect.DefaultTTL, "TTL on synthetic DNS answers, in whole seconds (0 asks clients not to cache)")
+	generation := flag.Int("generation", -1, "allocate synthetic addresses only from slice (N mod 16) of each pool, where N is the controller's generation number, so consecutive generations of a sandbox never share an address (-1 uses the whole pool)")
 	sandboxID := flag.String("sandbox-id", "", "value for the Sandbox-Id header on every tunnel request")
 	flag.Parse()
-	dns := virtualDNS(*dnsTTL)
+	dns := virtualDNS(*dnsTTL, *generation)
 
 	dial, err := boundaryDialer(*proxy)
 	if err != nil {

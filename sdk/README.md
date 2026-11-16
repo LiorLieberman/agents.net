@@ -72,6 +72,16 @@ Answers carry a 30-second TTL by default (set it with `-dns-ttl` or
 address quickly. After about 4.19 million distinct names the IPv4 pool runs
 out and further queries get `SERVFAIL`.
 
+A controller that restores a guest next to a fresh adapter, option (b) of
+[lifecycle.md Section 3](../spec/draft/lifecycle.md#3-snapshot-and-restore-controller-snapshot),
+passes its generation number `N` with `-generation` on every start, the first
+included. The adapter then allocates only from slice `N mod 16` of each pool,
+a `/14` of the IPv4 pool and a `/68` of the IPv6 pool, so consecutive
+generations never hand out the same address. A slice holds about 262,000 IPv4
+addresses, so a generation runs out sooner. An adapter that runs inside the
+guest and is snapshotted with it does not need this, because its state comes
+back with the guest (option (a)).
+
 These DNS limits, together with UDP being optional, mean the current adapters
 do not yet work with every networking application.
 

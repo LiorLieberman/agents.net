@@ -73,6 +73,7 @@ func runLauncher(args []string) {
 	mtu := fs.Uint("mtu", 1500, "TUN MTU")
 	udp := fs.Bool("udp", false, "tunnel UDP sessions via connect-udp (DNS is always answered locally)")
 	dnsTTL := fs.Duration("dns-ttl", tun2connect.DefaultTTL, "TTL on synthetic DNS answers, in whole seconds (0 asks clients not to cache)")
+	generation := fs.Int("generation", -1, "allocate synthetic addresses only from slice (N mod 16) of each pool, where N is the controller's generation number, so consecutive generations of a sandbox never share an address (-1 uses the whole pool)")
 	ingress := fs.String("ingress-socket", "", "serve the ingress channel (HTTP CONNECT 127.0.0.1:<port> or [::1]:<port>) on this Unix socket path or vsock://PORT; requires -ingress-port")
 	ingressPorts := fs.String("ingress-port", "", "comma-separated ports or ranges ingress streams may be joined to, e.g. 8081 or 443,8000-9000 (1-65535); nothing else is reachable")
 	joinTarget := fs.String("ingress-target", ingressTargetLoopback, "where ingress streams are joined: \"loopback\" (the requested loopback address) or \"tun\" (the device's own address, so services listening only on loopback stay unreachable)")
@@ -91,7 +92,7 @@ func runLauncher(args []string) {
 	if *joinTarget != ingressTargetLoopback && *joinTarget != ingressTargetTUN {
 		log.Fatalf("-ingress-target must be %q or %q", ingressTargetLoopback, ingressTargetTUN)
 	}
-	dns := virtualDNS(*dnsTTL)
+	dns := virtualDNS(*dnsTTL, *generation)
 
 	// Refuse to start if the namespace has any interface besides loopback:
 	// a half-configured sandbox must be a startup error, not a second route.

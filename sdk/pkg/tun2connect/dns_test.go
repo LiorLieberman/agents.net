@@ -130,6 +130,51 @@ func TestReservedTopOfPoolIsNeverAllocated(t *testing.T) {
 	}
 }
 
+func TestGenerationDNSStartsInItsSlice(t *testing.T) {
+	for _, test := range []struct {
+		generation uint
+		v4, v6     string
+	}{
+		{generation: 0, v4: "100.64.0.1", v6: "100::1"},
+		{generation: 1, v4: "100.68.0.1", v6: "100::1000:0:0:1"},
+		{generation: 15, v4: "100.124.0.1", v6: "100::f000:0:0:1"},
+		{generation: 17, v4: "100.68.0.1", v6: "100::1000:0:0:1"},
+	} {
+		d := NewGenerationDNS(test.generation)
+		v4, err4 := d.Resolve4("example.com")
+		v6, err6 := d.Resolve6("example.com")
+		if err4 != nil || err6 != nil || v4.String() != test.v4 || v6.String() != test.v6 {
+			t.Errorf("generation %d: got %v %v (%v, %v), want %s %s", test.generation, v4, v6, err4, err6, test.v4, test.v6)
+		}
+	}
+}
+
+func TestGenerationSlicesAreDisjoint(t *testing.T) {
+	for g := range uint(Generations) {
+		a := NewGenerationDNS(g)
+		if a.v4.pool.Bits() != 14 || !v4Pool.Contains(a.v4.pool.Addr()) || a.v6.pool.Bits() != 68 || !v6Pool.Contains(a.v6.pool.Addr()) {
+			t.Fatalf("generation %d: slices %s and %s are not a sixteenth of the pools", g, a.v4.pool, a.v6.pool)
+		}
+		for h := g + 1; h < Generations; h++ {
+			b := NewGenerationDNS(h)
+			if a.v4.pool.Overlaps(b.v4.pool) || a.v6.pool.Overlaps(b.v6.pool) {
+				t.Errorf("generations %d and %d overlap: %s %s, %s %s", g, h, a.v4.pool, a.v6.pool, b.v4.pool, b.v6.pool)
+			}
+		}
+	}
+}
+
+func TestGenerationSliceRunsOutInsteadOfSpilling(t *testing.T) {
+	d := NewGenerationDNS(1)
+	d.v4.last = netip.MustParseAddr("100.71.255.254")
+	if addr, err := d.Resolve4("last.example"); err != nil || addr.String() != "100.71.255.255" {
+		t.Fatalf("last address of the slice: %v, %v", addr, err)
+	}
+	if addr, err := d.Resolve4("next.example"); !errors.Is(err, ErrPoolExhausted) {
+		t.Fatalf("allocation left the slice: %v, %v", addr, err)
+	}
+}
+
 func buildQuery(t testing.TB, name string, qtype dnsmessage.Type) []byte {
 	t.Helper()
 	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 42, RecursionDesired: true})
