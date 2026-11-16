@@ -85,6 +85,21 @@ back with the guest (option (a)).
 These DNS limits, together with UDP being optional, mean the current adapters
 do not yet work with every networking application.
 
+The table below is the in-guest launcher's compatibility statement for the
+packet adapter profile ([adapters.md Section 2](../spec/draft/adapters.md#2-packet-adapter-adapter-packet)).
+
+| Item | Value |
+| --- | --- |
+| Transports | TCP as CONNECT. UDP as connect-udp with `-udp`. DNS on UDP port 53 is answered locally. Nothing else is carried. |
+| DNS answers | A and AAAA get a synthetic address. Other types and classes get an empty `NOERROR` answer, and a full pool gets `SERVFAIL`. TCP port 53 is not answered locally. |
+| Synthetic ranges | `100.64.0.0/10` and `100::/64`, except the top `/24` and `/120`. |
+| Capacity and reuse | 65,536 names per address family, least recently used forgotten first. An address is never reused within one adapter lifetime. |
+| Generations | Option (a) when the adapter is snapshotted with the guest, and option (b) with `-generation`. |
+| MTU | 1500 bytes by default, set with `-mtu`. |
+| Denial latency | The boundary's answer time, at most 15,000 ms (the dial timeout). |
+| TCP denial | Reset before the handshake completes, seen as connection refused. |
+| UDP denial | ICMP port unreachable without `-udp`. With `-udp` the datagrams are dropped and the workload times out. |
+
 ## 2. Process Supervision and Lifecycle Models
 
 How the in-guest networking process is supervised depends on the
