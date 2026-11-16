@@ -2,8 +2,23 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
+
+func TestListenIngressRejectsAnyVsockPort(t *testing.T) {
+	for _, spec := range []string{"vsock://0", "vsock://:0", "vsock://4294967295"} {
+		ln, err := listenIngress(spec)
+		if err == nil {
+			ln.Close()
+			t.Errorf("listenIngress(%q) succeeded, want an error", spec)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid vsock port") {
+			t.Errorf("listenIngress(%q) = %v, want an invalid port error", spec, err)
+		}
+	}
+}
 
 func TestParseRunArgs(t *testing.T) {
 	for _, test := range []struct {

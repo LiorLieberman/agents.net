@@ -300,6 +300,10 @@ func listenIngress(spec string) (net.Listener, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid vsock port %q: %w", rawPort, err)
 		}
+		// 0 and VMADDR_PORT_ANY both bind a random port, which the host would not know to dial.
+		if port == 0 || port == unix.VMADDR_PORT_ANY {
+			return nil, fmt.Errorf("invalid vsock port %q: the host needs a fixed port", rawPort)
+		}
 		// vsock.Listen looks up the guest's address in /dev/vsock, which containers
 		// often don't have. Listening on any address needs no lookup.
 		return vsock.ListenContextID(unix.VMADDR_CID_ANY, uint32(port), nil)
