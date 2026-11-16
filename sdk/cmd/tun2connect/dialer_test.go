@@ -2,11 +2,15 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -131,4 +135,80 @@ func TestIngressOnlyReachesPinnedPort(t *testing.T) {
 			t.Errorf("%s: got %d %q %q, want %d %q", test.name, status, reason, rest, test.status, test.reason)
 		}
 	}
+}
+
+// flakyListener fails with err failures times before each Accept it
+// passes on to the wrapped listener.
+type flakyListener struct {
+	net.Listener
+	failures int
+	err      error
+	failed   int
+}
+
+func (l *flakyListener) Accept() (net.Conn, error) {
+	if l.failed < l.failures {
+		l.failed++
+		return nil, l.err
+	}
+	l.failed = 0
+	return l.Listener.Accept()
+}
+
+// TestServeIngressAcceptErrors checks that a few failed accepts only delay
+// ingress, and that serveIngress returns once its listener is closed or
+// accepting keeps failing, so the launcher exits instead of running with
+// ingress gone.
+func TestServeIngressAcceptErrors(t *testing.T) {
+	delay := acceptRetryDelay
+	acceptRetryDelay = time.Millisecond
+	t.Cleanup(func() { acceptRetryDelay = delay })
+	emfile := &net.OpError{Op: "accept", Net: "unix", Err: os.NewSyscallError("accept4", syscall.EMFILE)}
+	wait := func(served chan error, want error) {
+		t.Helper()
+		select {
+		case err := <-served:
+			if !errors.Is(err, want) {
+				t.Fatalf("serveIngress returned %v, want %v", err, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("serveIngress kept running, want it to return %v", want)
+		}
+	}
+
+	socket := filepath.Join(t.TempDir(), "ingress.sock")
+	inner, err := listenIngress(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One failure short of the limit before every accept: each success
+	// must start the count again.
+	served := make(chan error, 1)
+	go func() {
+		served <- serveIngress(&flakyListener{Listener: inner, failures: maxAcceptFailures - 1, err: emfile}, &portSet{}, false)
+	}()
+	for range 2 {
+		conn, err := net.Dial("unix", socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		io.WriteString(conn, "CONNECT 127.0.0.1:80 HTTP/1.1\r\nHost: 127.0.0.1:80\r\n\r\n")
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		conn.Close()
+		if err != nil {
+			t.Fatalf("no answer after failed accepts: %v", err)
+		}
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("got %d after failed accepts, want 403", resp.StatusCode)
+		}
+	}
+
+	inner.Close()
+	wait(served, net.ErrClosed)
+
+	go func() {
+		served <- serveIngress(&flakyListener{failures: math.MaxInt, err: emfile}, &portSet{}, false)
+	}()
+	wait(served, syscall.EMFILE)
 }

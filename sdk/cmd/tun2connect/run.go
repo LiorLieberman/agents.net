@@ -8,6 +8,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -148,7 +149,11 @@ func runLauncher(args []string) {
 	defer eng.Close()
 
 	if ingressListener != nil {
-		go serveIngress(ingressListener, pinned, *joinTarget == ingressTargetTUN)
+		// Ingress was asked for, so without it the sandbox is unreachable while
+		// looking healthy. Exit so the supervisor sees the failure.
+		go func() {
+			log.Fatalf("ingress listener stopped: %v", serveIngress(ingressListener, pinned, *joinTarget == ingressTargetTUN))
+		}()
 	}
 
 	if len(argv) == 0 {
@@ -399,13 +404,29 @@ func joinAddress(target string, viaTUN bool) string {
 // agent's listener, so the host can deliver inbound requests without the
 // sandbox exposing any port. Only the pinned ports are reachable: the
 // request names one, it does not choose another. With viaTUN the stream
-// is joined on the device's own address instead of loopback.
-func serveIngress(ln net.Listener, pinned *portSet, viaTUN bool) {
+// is joined on the device's own address instead of loopback. Failed
+// accepts are retried, since causes like running out of file descriptors
+// pass. It returns once the listener is closed or maxAcceptFailures
+// accepts in a row have failed.
+func serveIngress(ln net.Listener, pinned *portSet, viaTUN bool) error {
+	failures := 0
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			return
+			// The vsock listener reports EBADF, not net.ErrClosed, for Accept after Close.
+			if errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.EBADF) {
+				return err
+			}
+			if failures++; failures >= maxAcceptFailures {
+				return fmt.Errorf("%d accepts failed in a row: %w", failures, err)
+			}
+			if failures == 1 {
+				log.Printf("ingress: %v, retrying", err)
+			}
+			time.Sleep(acceptRetryDelay)
+			continue
 		}
+		failures = 0
 		go func(conn net.Conn) {
 			defer conn.Close()
 			conn.SetDeadline(time.Now().Add(5 * time.Second))
@@ -437,6 +458,13 @@ func serveIngress(ln net.Listener, pinned *portSet, viaTUN bool) {
 		}(conn)
 	}
 }
+
+// Failed accepts are retried every acceptRetryDelay. maxAcceptFailures in
+// a row, about 30 seconds, means ingress is not coming back.
+const maxAcceptFailures = 300
+
+// acceptRetryDelay is a variable so tests can shorten it.
+var acceptRetryDelay = 100 * time.Millisecond
 
 // maxIngressHead bounds the request head read from the gateway.
 const maxIngressHead = 8 << 10
